@@ -2,6 +2,10 @@
 # Author: Affe Null
 # SPDX-License-Identifier: MIT
 
+# Abort on the first failed command so that, e.g., a failed `fastboot oem sudo`
+# does not lead to flashing a custom vbmeta/recovery on an unprepared device.
+set -e
+
 cd "$(dirname "$0")"
 
 if [ ! -f pkmd.bin ] || [ ! -f vbmeta.img ] || [ ! -f lk2nd.img ]; then

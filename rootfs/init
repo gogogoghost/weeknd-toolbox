@@ -51,15 +51,28 @@ pager() {
 	clear
 }
 
-find_blk() {
-	if [ -n "$1" ]; then
-		cd /sys/class/block
-		for blk in *; do
-			if grep -qxF "PARTNAME=$1" "$blk/uevent"; then
-				echo "/dev/$blk"
+# Print the block device for partition label $1. Never prompts; returns 1 if the
+# label is not found. Use this (not find_blk) for destructive operations.
+lookup_blk() {
+	local blk
+	for blk in /sys/class/block/*; do
+		if grep -qxF "PARTNAME=$1" "$blk/uevent" 2>/dev/null; then
+			if [ -b "/dev/${blk##*/}" ]; then
+				echo "/dev/${blk##*/}"
 				return 0
 			fi
-		done
+		fi
+	done
+	return 1
+}
+
+# Like lookup_blk, but falls back to asking the user for a partition number.
+# Only suitable for non-destructive uses (e.g. exposing via USB storage).
+find_blk() {
+	if [ -n "$1" ]; then
+		if lookup_blk "$1"; then
+			return 0
+		fi
 		echo "${red}${bold}Failed to find partition '$1'${normal}" >&2
 	fi
 	echo "Enter path:" >&2
@@ -82,6 +95,9 @@ init_usb() {
 
 	mkdir /usb/g1/functions/mass_storage.0
 	echo 1 > /usb/g1/functions/mass_storage.0/lun.0/removable
+	# Default to read-only so backups can't be corrupted by the host
+	# (auto-mount, fsck, ...). Writing must be enabled explicitly in the menu.
+	echo 1 > /usb/g1/functions/mass_storage.0/lun.0/ro
 
 	mkdir /usb/g1/configs/c.1
 	mkdir /usb/g1/configs/c.1/strings/0x409
@@ -100,10 +116,25 @@ usb_config_mass_storage() {
 	echo "$1" > /usb/g1/functions/mass_storage.0/lun.0/file
 }
 
+# The LUN's read-only flag can only be changed while no file is attached.
+usb_toggle_ro() {
+	local lun=/usb/g1/functions/mass_storage.0/lun.0
+	if [ "$(cat $lun/ro)" = 1 ]; then
+		echo 0 > $lun/ro
+	else
+		echo 1 > $lun/ro
+	fi
+}
+
 usb_check_mass_storage() {
 	ums_file=$(cat /usb/g1/functions/mass_storage.0/lun.0/file)
+	if [ "$(cat /usb/g1/functions/mass_storage.0/lun.0/ro)" = 1 ]; then
+		ums_mode="read-only"
+	else
+		ums_mode="${red}READ-WRITE${normal}"
+	fi
 	if [ -n "$ums_file" ]; then
-		echo "USB storage on: $ums_file"
+		echo "USB storage on: $ums_file ($ums_mode)"
 	else
 		echo "USB storage off"
 	fi
@@ -135,6 +166,7 @@ mass_storage_menu() {
 		if [ -e /dev/mmcblk1 ]; then
 			echo "6. SD card"
 		fi
+		echo "7. Mode: $ums_mode${bold}"
 	fi
 	echo "${green}${backarrow}  Exit"
 	echo "${normal}==================="
@@ -172,6 +204,11 @@ mass_storage() {
 			6)
 				usb_config_mass_storage /dev/mmcblk1
 				;;
+			7)
+				if [ -z "$ums_file" ]; then
+					usb_toggle_ro
+				fi
+				;;
 			$back)
 				break
 				;;
@@ -181,13 +218,56 @@ mass_storage() {
 }
 
 really_disable_fscrypt() {
+	local vendor_blk userdata_blk fstab
+	fstab=/vendor/etc/fstab.qcom
+
+	# Resolve both partitions by label up front. Never fall back to a
+	# user-typed partition number here: a typo would wipe the wrong partition.
+	if ! vendor_blk=$(lookup_blk vendor); then
+		echo "${red}${bold}Partition 'vendor' not found. Aborting.${normal}"
+		return 1
+	fi
+	if ! userdata_blk=$(lookup_blk userdata); then
+		echo "${red}${bold}Partition 'userdata' not found. Aborting.${normal}"
+		return 1
+	fi
+
 	echo "Patching fstab..."
 	mkdir -p /vendor
-	mount -t ext4 "$(find_blk vendor)" /vendor || return 1
-	sed -i 's/fileencryption=ice,//' /vendor/etc/fstab.qcom
-	umount /vendor
-	echo "Corrupting userdata..."
-	dd if=/dev/zero of="$(find_blk userdata)" bs=2048 count=4096
+	if ! mount -t ext4 "$vendor_blk" /vendor; then
+		echo "${red}${bold}Failed to mount vendor. Aborting.${normal}"
+		return 1
+	fi
+	if ! grep -q 'fileencryption=ice,' "$fstab"; then
+		umount /vendor
+		echo "${red}${bold}'fileencryption=ice,' not found in fstab.${normal}"
+		echo "Encryption may already be disabled or uses an unknown"
+		echo "format. Nothing was changed; userdata was NOT erased."
+		return 1
+	fi
+	# Dry run: make sure the substitution removes every encryption flag
+	# before modifying anything.
+	if sed 's/fileencryption=ice,//' "$fstab" | grep -q 'fileencryption='; then
+		umount /vendor
+		echo "${red}${bold}fstab has an unexpected 'fileencryption=' entry.${normal}"
+		echo "Nothing was changed; userdata was NOT erased."
+		echo "Check $fstab manually."
+		return 1
+	fi
+	if ! sed -i 's/fileencryption=ice,//' "$fstab"; then
+		umount /vendor
+		echo "${red}${bold}Failed to patch fstab. Userdata was NOT erased.${normal}"
+		return 1
+	fi
+	sync
+	if ! umount /vendor; then
+		echo "${red}${bold}Failed to unmount vendor. Userdata was NOT erased.${normal}"
+		return 1
+	fi
+
+	echo "Corrupting userdata ($userdata_blk)..."
+	dd if=/dev/zero of="$userdata_blk" bs=2048 count=4096 || return 1
+	sync
 	reboot -f
 }
 

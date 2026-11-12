@@ -2,12 +2,13 @@
 # Author: Affe Null
 # SPDX-License-Identifier: MIT
 set -e
+cd "$(dirname "$0")"
 
-repo="https://github.com/msm8916-mainline/lk2nd"
+. ./pins.sh
+require_tool "${TOOLCHAIN_PREFIX}gcc" "lk2nd"
+require_tool dtc "lk2nd device trees"
 
-if [ ! -d lk2nd ]; then
-	git clone --depth 1 -b experimental-tmp3 "$repo" lk2nd
-fi
+./fetch-git.sh lk2nd "$LK2ND_REPO" "$LK2ND_COMMIT"
 
 cd lk2nd
 rm -rf lk2nd/device/dts/msm8952

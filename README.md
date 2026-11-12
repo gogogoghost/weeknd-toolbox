@@ -14,16 +14,39 @@ close-to-mainline kernel:
 
 ### Building
 
-#### Requirements: TODO
+#### Requirements
+
+On Arch Linux:
+
+```sh
+sudo pacman -S --needed aarch64-linux-gnu-gcc arm-none-eabi-gcc \
+    base-devel git bc flex bison perl python dtc cpio openssl curl android-tools
+```
+
+`build.sh` checks for these up front and lists anything missing.
 
 To download and build all components, run:
 
 ```sh
-CROSS_COMPILE=aarch64-linux-gnu- TOOLCHAIN_PREFIX=arm-none-eabi- ./build.sh
+./build.sh
 ```
+
+This needs the `aarch64-linux-gnu-gcc` (kernel) and `arm-none-eabi-gcc` (lk2nd)
+cross-compilers plus `dtc`. Set `CROSS_COMPILE` / `TOOLCHAIN_PREFIX` to use
+differently named toolchains.
 
 You can optionally set the JOBS environment variable to the number of make jobs
 to use for building the Linux kernel.
+
+All external inputs (kernel and lk2nd commits, busybox and stock vbmeta
+SHA-256 hashes) are pinned in `pins.sh`. The build aborts if anything fetched
+does not match its pin.
+
+- `STOCK_VBMETA=/path/to/your/vbmeta.img` builds from a dump of **your own**
+  phone's vbmeta partition instead of the original author's copy (recommended:
+  the author's file contains boot/dtbo hashes for one specific 2020 firmware).
+- `LINUX_REPO` / `LK2ND_REPO` fetch from a mirror you control; the commit pins
+  still apply.
 
 ### Booting
 After building, you can run `./flash.sh` to boot the hacking toolbox.
@@ -42,6 +65,10 @@ start holding the key again as soon as the warning disappears.
 - **WARNING**: Disabling encryption modifies the vendor partition. Please
   make a backup first using `dd` after exposing it via USB **without**
   mounting it.
+- **NOTE**: USB storage is exposed **read-only** by default, which is what you
+  want for backups. To modify a partition (as in the steps below), select
+  "USB storage" -> "7. Mode" to switch to read-write *before* selecting the
+  partition. The mode can only be changed while USB storage is off.
 
 ### Getting adb to work
 
@@ -49,7 +76,7 @@ start holding the key again as soon as the warning disappears.
 
 ```sh
 # Boot the hacking toolbox
-# Select "USB storage" -> "userdata"
+# Select "USB storage" -> "7. Mode" (read-write) -> "userdata"
 # Mount the exposed storage device on a Linux machine
 # You might have to execute these commands as root to avoid permission errors
 cd /path/to/mounted/userdata/
@@ -64,7 +91,7 @@ cat ~/.android/adbkey.pub >> misc/adb/adb_keys
 setfattr -n security.selinux -v u:object_r:system_data_file:s0 misc/adb/adb_keys
 
 # Unmount the storage device
-# Select "USB storage" -> "system"
+# Select "USB storage" -> "system" (mode stays read-write)
 # Mount the exposed storage device
 cd /path/to/mounted/system/
 
@@ -87,7 +114,7 @@ on property:sys.usb.ffs.ready=1 && property:sys.usb.config=mtp && property:sys.u
 
 ```sh
 # Boot the hacking toolbox
-# Select "USB storage" -> "userdata"
+# Select "USB storage" -> "7. Mode" (read-write) -> "userdata"
 # Mount the exposed storage device on a Linux machine
 # You might have to execute these commands as root to avoid permission errors
 cd /path/to/mounted/userdata/

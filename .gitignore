@@ -7,3 +7,6 @@ Image.gz-dtb
 initramfs.cpio.gz
 key.pem
 pkmd.bin
+*.partial/
+vbmeta.img.src
+backups/
