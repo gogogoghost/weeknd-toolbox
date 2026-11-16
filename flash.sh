@@ -7,6 +7,7 @@
 set -e
 
 cd "$(dirname "$0")"
+. ./pins.sh
 
 if [ ! -f pkmd.bin ] || [ ! -f vbmeta.img ] || [ ! -f lk2nd.img ]; then
 	echo 'Please run build.sh first.'
@@ -21,6 +22,9 @@ fi
 
 fastboot oem sudo
 fastboot flash avb_custom_key pkmd.bin
+# Remember which key the phone now trusts, so build.sh can warn on mismatch.
+(umask 077; mkdir -p "$KEY_DIR")
+sha256sum pkmd.bin | cut -d' ' -f1 > "$FLASHED_PKMD_RECORD"
 fastboot flash vbmeta vbmeta.img
 fastboot flash recovery lk2nd.img
 echo

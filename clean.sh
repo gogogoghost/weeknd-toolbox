@@ -1,6 +1,8 @@
 #!/bin/sh
 # Author: Affe Null
 # SPDX-License-Identifier: MIT
+#
+# Never deletes the signing key (see KEY_DIR in pins.sh): the phone trusts it.
 
 rm -rf \
 	boot.img \
@@ -9,7 +11,7 @@ rm -rf \
 	lk2nd.img \
 	vbmeta.img vbmeta.img.src \
 	initramfs.cpio.gz \
-	key.pem pkmd.bin \
+	pkmd.bin \
 	Image.gz-dtb
 
 if [ "$1" = "--all" ]; then

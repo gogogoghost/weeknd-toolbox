@@ -40,3 +40,12 @@ require_tool() {
 		exit 1
 	fi
 }
+
+# AVB signing key (private!). Kept outside the repo so `clean.sh` and git can't
+# touch it. The phone trusts the public half of this key (flashed to
+# avb_custom_key), so losing it means re-running `fastboot oem sudo` and
+# re-flashing avb_custom_key. Back it up somewhere private.
+KEY_DIR="${WEEKND_KEY_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/weeknd-toolbox}"
+AVB_KEY="$KEY_DIR/avb-key.pem"
+# SHA-256 of the pkmd.bin last flashed to the phone (written by flash.sh)
+FLASHED_PKMD_RECORD="$KEY_DIR/flashed-pkmd.sha256"

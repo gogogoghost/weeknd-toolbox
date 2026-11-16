@@ -179,28 +179,64 @@ fi
 stock_vbmeta_sha256=$(sha256_of "$stock_vbmeta")
 echo ">> stock vbmeta sha256: $stock_vbmeta_sha256"
 
-# Rebuild vbmeta.img whenever the stock vbmeta it was built from changes
-# (e.g. switching from the author's file to your own dump).
-if [ -f vbmeta.img ] && [ "$(cat vbmeta.img.src 2>/dev/null)" != "$stock_vbmeta_sha256" ]; then
-	echo ">> stock vbmeta changed, rebuilding vbmeta.img"
+# --- Signing key -----------------------------------------------------------
+# Older versions kept key.pem in the repo; move it (never regenerate it: the
+# phone already trusts it).
+if [ -f key.pem ]; then
+	if [ ! -f "$AVB_KEY" ]; then
+		(umask 077; mkdir -p "$KEY_DIR")
+		chmod 700 "$KEY_DIR"
+		mv key.pem "$AVB_KEY"
+		chmod 600 "$AVB_KEY"
+		echo ">> moved signing key: key.pem -> $AVB_KEY"
+	elif cmp -s key.pem "$AVB_KEY"; then
+		rm key.pem
+		echo ">> removed duplicate key.pem (identical to $AVB_KEY)"
+	else
+		echo ">> ERROR: key.pem in the repo differs from $AVB_KEY." >&2
+		echo ">> Decide which one the phone trusts and remove the other." >&2
+		exit 1
+	fi
+fi
+
+if [ ! -f "$AVB_KEY" ]; then
+	echo ">> generating new signing key: $AVB_KEY"
+	echo ">> NOTE: the phone must be re-flashed with its public half"
+	echo ">>       (flash.sh does this via avb_custom_key)."
+	(umask 077; mkdir -p "$KEY_DIR" && openssl genrsa -out "$AVB_KEY" 2048)
+fi
+if [ -n "$(find "$AVB_KEY" -perm /077)" ]; then
+	echo ">> WARNING: $AVB_KEY was readable by others; fixing permissions"
+	chmod 600 "$AVB_KEY"
+fi
+
+python3 avbtool.py extract_public_key --key "$AVB_KEY" --output pkmd.bin
+pkmd_sha256=$(sha256_of pkmd.bin)
+echo ">> signing key pkmd sha256: $pkmd_sha256"
+if [ -f "$FLASHED_PKMD_RECORD" ] && [ "$(cat "$FLASHED_PKMD_RECORD")" != "$pkmd_sha256" ]; then
+	echo ">> WARNING: this key differs from the one last flashed to the phone."
+	echo ">>          Flash avb_custom_key again (flash.sh does) or it won't boot"
+	echo ">>          images signed with it."
+fi
+
+# Rebuild vbmeta.img whenever its inputs change: the stock vbmeta it was built
+# from (e.g. switching to your own dump) or the signing key.
+vbmeta_src="$stock_vbmeta_sha256 $pkmd_sha256"
+if [ -f vbmeta.img ] && [ "$(cat vbmeta.img.src 2>/dev/null)" != "$vbmeta_src" ]; then
+	echo ">> vbmeta inputs changed, rebuilding vbmeta.img"
 	rm -f vbmeta.img
 fi
 
 if needs vbmeta.img; then
-	# Reuse an existing signing key; only generate one if none exists.
-	if [ ! -f key.pem ]; then
-		openssl genrsa 2048 > key.pem
-	fi
-	python3 avbtool.py extract_public_key --key key.pem --output pkmd.bin
 	python3 avbtool.py make_vbmeta_image \
 		--padding_size 4096 \
 		--algorithm SHA512_RSA2048 \
-		--key key.pem \
+		--key "$AVB_KEY" \
 		--public_key_metadata pkmd.bin \
 		--output vbmeta.img \
 		--include_descriptors_from_image "$stock_vbmeta" \
 		--set_hashtree_disabled_flag
-	echo "$stock_vbmeta_sha256" > vbmeta.img.src
+	echo "$vbmeta_src" > vbmeta.img.src
 fi
 
 step "Done!"

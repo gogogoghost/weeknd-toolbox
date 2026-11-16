@@ -48,6 +48,17 @@ does not match its pin.
 - `LINUX_REPO` / `LK2ND_REPO` fetch from a mirror you control; the commit pins
   still apply.
 
+### Signing key
+
+The first build creates an AVB signing key at
+`~/.config/weeknd-toolbox/avb-key.pem` (override with `WEEKND_KEY_DIR`).
+`flash.sh` installs its public half on the phone (`avb_custom_key`), and from
+then on the phone only boots custom images signed with it. The key lives
+outside the repo so `clean.sh` and git never touch it. **Back it up privately**:
+if it's lost you can generate a new one, but you'll need to re-run `flash.sh`
+(including `fastboot oem sudo`) before the phone accepts newly built images.
+The build warns if the current key differs from the one last flashed.
+
 ### Booting
 After building, you can run `./flash.sh` to boot the hacking toolbox.
 This script permanently modifies the recovery partition by installing lk2nd
