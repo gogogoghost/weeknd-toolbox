@@ -49,3 +49,9 @@ KEY_DIR="${WEEKND_KEY_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/weeknd-toolbox}"
 AVB_KEY="$KEY_DIR/avb-key.pem"
 # SHA-256 of the pkmd.bin last flashed to the phone (written by flash.sh)
 FLASHED_PKMD_RECORD="$KEY_DIR/flashed-pkmd.sha256"
+
+# Stock vbmeta dumped from YOUR phone (the vbmetabak partition), used by
+# default when present. For the reference phone this is byte-identical to the
+# author's copy (AUTHOR_VBMETA_SHA256), which remains only as a fallback for
+# machines without your backup.
+OWN_VBMETA="$KEY_DIR/stock-vbmeta.img"

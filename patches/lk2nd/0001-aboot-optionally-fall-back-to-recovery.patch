@@ -1,0 +1,64 @@
+From: weeknd-toolbox
+Subject: [PATCH] aboot: optionally fall back to recovery instead of boot
+
+When lk2nd runs from the recovery partition (LK2ND_PARTITION_BASE=recovery),
+it is only started when the user already asked for recovery mode. If no
+extlinux file system is found, booting the stock "boot" partition is
+pointless (lk2nd cannot boot the stock kernel). With
+LK2ND_FALLBACK_RECOVERY=1, boot the recovery partition (the part after
+lk2nd) instead. Holding volume-up still skips the extlinux scan entirely.
+
+Applies to lk2nd commit e9c8b21735c13dd7ace808b1e35451638f0a0c6d (tag 23.1).
+---
+diff --git i/app/aboot/aboot.c w/app/aboot/aboot.c
+index b44a5c2..7bf02de 100644
+--- i/app/aboot/aboot.c
++++ w/app/aboot/aboot.c
+@@ -4670,8 +4670,15 @@ void cmd_continue(const char *arg, void *data, unsigned sz)
+ 		exit_menu_keys_detection();
+ #endif
+ #if WITH_LK2ND_BOOT
+-		if (!boot_into_recovery)
++		if (!boot_into_recovery) {
+ 			lk2nd_boot();
++#if LK2ND_FALLBACK_RECOVERY
++			/* No bootable file system found: boot the recovery
++			 * partition instead of the stock boot partition. */
++			boot_into_recovery = 1;
++			dprintf(INFO, "boot: Falling back to the recovery partition.\n");
++#endif
++		}
+ #endif
+ 		boot_linux_from_mmc();
+ 	}
+@@ -5653,8 +5660,15 @@ normal_boot:
+ 	if (!boot_into_fastboot)
+ 	{
+ #if WITH_LK2ND_BOOT
+-		if (!boot_into_recovery)
++		if (!boot_into_recovery) {
+ 			lk2nd_boot();
++#if LK2ND_FALLBACK_RECOVERY
++			/* No bootable file system found: boot the recovery
++			 * partition instead of the stock boot partition. */
++			boot_into_recovery = 1;
++			dprintf(INFO, "boot: Falling back to the recovery partition.\n");
++#endif
++		}
+ #endif
+ 
+ 		if (target_is_emmc_boot())
+diff --git i/lk2nd/project/base.mk w/lk2nd/project/base.mk
+index 1e3eaf1..9225bb8 100644
+--- i/lk2nd/project/base.mk
++++ w/lk2nd/project/base.mk
+@@ -54,6 +54,9 @@ endif
+ ifeq ($(LK2ND_FORCE_FASTBOOT), 1)
+ 	DEFINES += LK2ND_FORCE_FASTBOOT=1
+ endif
++ifeq ($(LK2ND_FALLBACK_RECOVERY), 1)
++	DEFINES += LK2ND_FALLBACK_RECOVERY=1
++endif
+ 
+ ifdef LK2ND_FASTBOOT_DELAY
+ 	DEFINES += LK2ND_FASTBOOT_DELAY=$(LK2ND_FASTBOOT_DELAY)

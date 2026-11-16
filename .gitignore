@@ -1,5 +1,5 @@
-linux/
-lk2nd/
+/linux/
+/lk2nd/
 *.img
 rootfs/sbin/
 *.dtb
@@ -10,3 +10,5 @@ pkmd.bin
 *.partial/
 vbmeta.img.src
 backups/
+Image.gz-dtb.src
+lk2nd.src

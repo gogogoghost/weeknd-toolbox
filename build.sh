@@ -75,21 +75,47 @@ fetch_pinned() {
 	echo ">> OK       $2 (sha256 verified)"
 }
 
+# inputs_changed <stamp-file> <settings-string> <files...>
+# Fingerprints the settings string plus the given files (names + contents).
+# Returns 0 (true) if the
+# fingerprint differs from the one stored in <stamp-file>, i.e. a rebuild is
+# needed. Call record_inputs <stamp-file> after a successful rebuild.
+inputs_changed() {
+	stamp="$1"; settings="$2"; shift 2
+	fingerprint=$( (echo "$settings"; for f in "$@"; do echo "$f"; cat "$f"; done) | sha256sum | cut -d' ' -f1)
+	[ "$(cat "$stamp" 2>/dev/null)" != "$fingerprint" ]
+}
+record_inputs() {
+	echo "$fingerprint" > "$1"
+}
+
 step linux
 
 # Always verify the checkout matches the pin, even if outputs already exist.
 [ ! -d linux ] || ./fetch-git.sh linux "$LINUX_REPO" "$LINUX_COMMIT"
 
+# Rebuild when the kernel inputs change, not just when the output is missing.
+if inputs_changed Image.gz-dtb.src "$LINUX_COMMIT $CROSS_COMPILE" defconfig build-linux.sh; then
+	[ ! -f Image.gz-dtb ] || echo ">> kernel inputs changed, rebuilding"
+	rm -f Image.gz-dtb
+fi
 if needs Image.gz-dtb; then
 	./build-linux.sh
+	record_inputs Image.gz-dtb.src
 fi
 
 step lk2nd
 
 [ ! -d lk2nd ] || ./fetch-git.sh lk2nd "$LK2ND_REPO" "$LK2ND_COMMIT"
 
+# Rebuild when lk2nd inputs change: pin, patches, device tree, build script.
+if inputs_changed lk2nd.src "$LK2ND_COMMIT $TOOLCHAIN_PREFIX" build-lk2nd.sh patches/lk2nd/*.patch lk2nd-dts-msm8952/*; then
+	[ ! -f lk2nd/build-lk2nd-msm8952/lk.bin-dtb ] || echo ">> lk2nd inputs changed, rebuilding"
+	rm -f lk2nd/build-lk2nd-msm8952/lk.bin-dtb
+fi
 if needs lk2nd/build-lk2nd-msm8952/lk.bin-dtb; then
 	./build-lk2nd.sh
+	record_inputs lk2nd.src
 fi
 
 step busybox
@@ -169,15 +195,21 @@ if [ -n "$STOCK_VBMETA" ]; then
 	fi
 	stock_vbmeta="$STOCK_VBMETA"
 	echo ">> using your own vbmeta dump: $stock_vbmeta"
+elif [ -f "$OWN_VBMETA" ]; then
+	stock_vbmeta="$OWN_VBMETA"
+	echo ">> using your own vbmeta dump: $stock_vbmeta"
 else
 	fetch_pinned "$AUTHOR_VBMETA_URL" stock_vbmeta.img "$AUTHOR_VBMETA_SHA256"
 	stock_vbmeta=stock_vbmeta.img
-	echo ">> WARNING: using the original author's vbmeta (another device's"
-	echo ">>          2020-05-05 firmware). Its boot/dtbo hashes may not match"
-	echo ">>          your phone. Set STOCK_VBMETA to your own dump when you have it."
+	echo ">> WARNING: using the original author's vbmeta (firmware 00.2238.20.13)."
+	echo ">>          Back up your phone (backup.sh) and copy parts/vbmetabak.img"
+	echo ">>          to $OWN_VBMETA to build from your own."
 fi
 stock_vbmeta_sha256=$(sha256_of "$stock_vbmeta")
 echo ">> stock vbmeta sha256: $stock_vbmeta_sha256"
+if [ "$stock_vbmeta" != stock_vbmeta.img ] && [ "$stock_vbmeta_sha256" = "$AUTHOR_VBMETA_SHA256" ]; then
+	echo ">>          (identical to the author's copy)"
+fi
 
 # --- Signing key -----------------------------------------------------------
 # Older versions kept key.pem in the repo; move it (never regenerate it: the

@@ -12,7 +12,7 @@ rm -rf \
 	vbmeta.img vbmeta.img.src \
 	initramfs.cpio.gz \
 	pkmd.bin \
-	Image.gz-dtb
+	Image.gz-dtb Image.gz-dtb.src lk2nd.src
 
 if [ "$1" = "--all" ]; then
 	rm -rf linux lk2nd linux.partial lk2nd.partial rootfs/sbin stock_vbmeta.img stock_vbmeta.img.partial

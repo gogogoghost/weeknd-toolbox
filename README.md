@@ -42,9 +42,11 @@ All external inputs (kernel and lk2nd commits, busybox and stock vbmeta
 SHA-256 hashes) are pinned in `pins.sh`. The build aborts if anything fetched
 does not match its pin.
 
-- `STOCK_VBMETA=/path/to/your/vbmeta.img` builds from a dump of **your own**
-  phone's vbmeta partition instead of the original author's copy (recommended:
-  the author's file contains boot/dtbo hashes for one specific 2020 firmware).
+- The stock vbmeta (whose boot/dtbo hashes are re-signed with your key) is
+  taken from `~/.config/weeknd-toolbox/stock-vbmeta.img` when present: copy
+  `parts/vbmetabak.img` from a `backup.sh` backup there. `STOCK_VBMETA=path`
+  overrides it. Without either, the original author's copy (firmware
+  00.2238.20.13) is downloaded and verified against its pinned hash.
 - `LINUX_REPO` / `LK2ND_REPO` fetch from a mirror you control; the commit pins
   still apply.
 
@@ -65,8 +67,16 @@ This script permanently modifies the recovery partition by installing lk2nd
 to it.
 
 To boot the hacking toolbox, hold the volume-up key while turning on the
-phone, then release it when the "custom operating system" warning appears, and
-start holding the key again as soon as the warning disappears.
+phone and release it when the "custom operating system" warning appears.
+
+lk2nd first looks for an ext2/ext4 file system with `extlinux/extlinux.conf`
+on any partition of 16 MiB or more, including an SD card, and boots it if
+found. Otherwise it boots the toolbox. Hold volume-up again as soon as the
+warning disappears to skip that search and always get the toolbox (rescue
+route). Turning the phone on without any keys boots KaiOS as usual.
+
+lk2nd is built from the pinned release plus the patches in `patches/lk2nd/`,
+which are re-applied to a pristine checkout on every build.
 
 # Sideloading guide
 

@@ -10,7 +10,24 @@
 	qcom,msm-id = <QCOM_ID_QM215 0>;
 	qcom,board-id = <QCOM_BOARD_ID(QRD, 1, 0) 5>;
 
+	/* Lets the overlay-wnd*.dts overlays (in the image's recovery_dtbo)
+	 * reference &lk2nd. Kept because the boot image layout with those
+	 * overlays is the one proven to boot from recovery on this phone. */
 	__symbols__ {
 		lk2nd = &lk2nd;
 	};
+};
+
+/*
+ * The Nokia 2780 Flip, hard-coded. The overlays were meant to set this at
+ * boot via oem,hw-id, but lk2nd's log shows no device node was matched, so
+ * they evidently aren't applied. The 2760 variants aren't supported anyway
+ * (no `fastboot oem sudo`).
+ */
+&lk2nd {
+	model = "Nokia 2780 Flip";
+	compatible = "nokia,weeknd";
+
+	/* Kernel DTB looked up by extlinux "fdtdir": <fdtdir>/qcom/<name>.dtb */
+	lk2nd,dtb-files = "qm215-nokia-weeknd";
 };
