@@ -8,7 +8,9 @@
   2. mke2fs -d turns the tarball into an ext4 root file system, and the boot
      files (kernel, device tree, extlinux.conf) into an ext2 one, the kind
      lk2nd can read.
-  3. Both go into a GPT disk image with fixed partition IDs.
+  3. Both go into a disk image with an MBR partition table (lk2nd can't read
+     GPT) and fixed partition IDs. `flip sd write` then extends the root
+     partition to the end of the card; the file system grows on first boot.
 
 The image contains your phone's firmware and its flip-link identity key:
 treat it like backups/ (private, never shared or committed).
@@ -40,9 +42,7 @@ HOST_TOOLS = ["perl", "h2ph", "apt", "dpkg", "mke2fs", "sfdisk", "mcopy", "debug
 
 MiB = 1 << 20
 SECTOR = 512
-# GPT partition type GUIDs
-TYPE_LINUX = "0FC63DAF-8483-4772-8E79-3D69D8477DE4"
-TYPE_ROOT_ARM64 = "B921B045-1DF0-41C3-AF44-4C6F280D3FAE"
+MBR_TYPE_LINUX = "83"
 # Namespace for the image's partition and file system IDs (derived, not random,
 # so identical inputs give identical IDs).
 _NS = uuid.UUID("6c1f3a52-8d0e-4b8e-9a51-6f6c6970736f")
@@ -118,8 +118,8 @@ def extract_firmware(backup_dir: Path, dest: Path) -> list[str]:
 
 @dataclass(frozen=True)
 class Ids:
-    disk: str
-    boot: str
+    disk: str  # MBR disk signature, 8 hex digits
+    boot: str  # partition IDs as Linux shows them: <disk>-01
     root: str
     boot_fs: str
     root_fs: str
@@ -127,7 +127,8 @@ class Ids:
     @classmethod
     def derive(cls, seed: str) -> "Ids":
         u = lambda what: str(uuid.uuid5(_NS, f"{what}:{seed}"))  # noqa: E731
-        return cls(u("disk"), u("boot"), u("root"), u("boot-fs"), u("root-fs"))
+        disk = u("disk")[:8]
+        return cls(disk, f"{disk}-01", f"{disk}-02", u("boot-fs"), u("root-fs"))
 
 
 def extlinux_conf(ids: Ids, debug: bool) -> str:
@@ -180,6 +181,11 @@ def stage(stage_dir: Path, ids: Ids, identity_pem: Path, firmware_from: Path,
     shutil.copytree(build.OUT.modules / "lib/modules" / release,
                     stage_dir / "usr/lib/modules" / release, symlinks=True)
     firmware = extract_firmware(firmware_from, stage_dir / "usr/lib/firmware")
+    # Display init sequences for panel-mipi-dbi (shared with the toolbox; no
+    # console on the screen without them).
+    for panel in sorted((config.ROOTFS / "lib/firmware").glob("*-panel.bin")):
+        shutil.copyfile(panel, stage_dir / "usr/lib/firmware" / panel.name)
+        firmware.append(panel.name)
     return {"kernel_release": release, "firmware": firmware}
 
 
@@ -317,17 +323,16 @@ def assemble(out: Path, boot_img: Path, root_img: Path, ids: Ids) -> None:
     boot_size, root_size = boot_img.stat().st_size, root_img.stat().st_size
     start_boot = MiB
     start_root = start_boot + boot_size
-    total = start_root + root_size + MiB  # room for the backup GPT
+    total = start_root + root_size
     out.unlink(missing_ok=True)
     with open(out, "wb") as f:
         f.truncate(total)
+    # MBR, not GPT: lk2nd 23.1 only reads MBR partition tables.
     script = (
-        "label: gpt\n"
-        f"label-id: {ids.disk}\n"
-        f"start={start_boot // SECTOR}, size={boot_size // SECTOR}, type={TYPE_LINUX}, "
-        f"uuid={ids.boot}, name=\"{profile.SD_BOOT_LABEL}\"\n"
-        f"start={start_root // SECTOR}, size={root_size // SECTOR}, type={TYPE_ROOT_ARM64}, "
-        f"uuid={ids.root}, name=\"{profile.SD_ROOT_LABEL}\"\n"
+        "label: dos\n"
+        f"label-id: 0x{ids.disk}\n"
+        f"start={start_boot // SECTOR}, size={boot_size // SECTOR}, type={MBR_TYPE_LINUX}\n"
+        f"start={start_root // SECTOR}, size={root_size // SECTOR}, type={MBR_TYPE_LINUX}\n"
     )
     run(["sfdisk", "-q", "--no-reread", "--no-tell-kernel", out], input_=script)
     with open(out, "r+b") as dst:
@@ -509,7 +514,17 @@ def write_card(dev: str, confirm) -> None:
     if result.returncode != 0:
         raise FlipError(f"the card doesn't read back what was written ({result.stdout.strip()}"
                         "). The card may be faulty or fake-capacity.")
+    say("extending the root partition to the end of the card ...")
+    grow_root_partition(dev)
     say("card written and verified. Eject it, put it in the phone and power on.")
+
+
+def grow_root_partition(dev: str, sudo: bool = True) -> None:
+    """Extend partition 2 to the end of the disk (the file system follows on first boot)."""
+    run([*(["sudo"] if sudo else []), "sfdisk", "-q", "--no-reread", "-N", "2", dev],
+        input_=", +\n")
+    if sudo:
+        run(["sudo", "partx", "-u", dev], check=False, quiet=True)
 
 
 # --- updating a card in place -----------------------------------------------------
@@ -520,9 +535,8 @@ def update_card(dev: str, confirm) -> None:
         raise FlipError(f"{dev} is not a block device (see lsblk)")
     card = inspect_card(dev)
     check_card(card, 0)
-    out = run(["lsblk", "-J", "-o", "PATH,PARTLABEL,PARTUUID", dev], capture=True,
-              quiet=True).stdout
-    parts = {c.get("partlabel"): c for c in json.loads(out)["blockdevices"][0].get("children", [])}
+    out = run(["lsblk", "-J", "-o", "PATH,LABEL", dev], capture=True, quiet=True).stdout
+    parts = {c.get("label"): c for c in json.loads(out)["blockdevices"][0].get("children", [])}
     if profile.SD_BOOT_LABEL not in parts or profile.SD_ROOT_LABEL not in parts:
         raise FlipError(f"{dev} is not a flip SD card (no {profile.SD_BOOT_LABEL}/"
                         f"{profile.SD_ROOT_LABEL} partitions)")

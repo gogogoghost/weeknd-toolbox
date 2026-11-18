@@ -52,7 +52,7 @@ SD_CMDLINE = "console=tty1 fbcon=font:10x18 loglevel=4"
 # sudo: administration is flipd over USB only.
 SD_PACKAGES = [
     # system
-    "systemd-sysv", "udev", "dbus", "libpam-systemd", "kmod", "systemd-repart",
+    "systemd-sysv", "udev", "dbus", "libpam-systemd", "kmod",
     "systemd-zram-generator", "procps", "less", "nano", "e2fsprogs", "fdisk", "kbd",
     "tzdata", "ca-certificates", "unattended-upgrades",
     # flipd

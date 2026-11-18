@@ -29,8 +29,6 @@ KVER="$(ls /usr/lib/modules)"
 depmod "$KVER"
 
 systemctl enable flip-gadget.service nftables.service NetworkManager.service
-mkdir -p /etc/systemd/system/sysinit.target.wants
-ln -sf /usr/lib/systemd/system/systemd-repart.service /etc/systemd/system/sysinit.target.wants/
 if [ "$DEBUG" = 1 ]; then
 	systemctl enable serial-getty@ttyGS0.service
 else

@@ -71,7 +71,10 @@ there would put the image in the wrong place.
   "custom operating system" warning appears.
 - **Linux from SD card:** same keys. lk2nd first looks for an ext2 file
   system with `extlinux/extlinux.conf` on any partition of 16 MiB or more,
-  including an SD card, and boots it if found, otherwise the toolbox.
+  including an SD card, and boots it if found, otherwise the toolbox. lk2nd
+  only reads MBR partition tables, not GPT (`flip sd build` uses MBR). If a
+  card doesn't boot, `fastboot oem boot-scan` in lk2nd's fastboot (volume-down
+  as lk2nd starts) reports what it found on each partition.
 - **Rescue:** hold volume-up again as soon as the warning disappears to skip
   that search and always get the toolbox.
 - **KaiOS:** power on without holding any keys.
@@ -91,9 +94,10 @@ flip sd write /dev/mmcblk0     # see lsblk; refuses anything that isn't an SD ca
 flip phone setup-host          # once per computer
 ```
 
-Put the card in the phone and power on holding volume-up (as for the toolbox);
-lk2nd finds the card and boots it. On first boot the root
-partition grows to fill the card.
+`flip sd write` extends the root partition to the end of the card after
+writing; the file system grows to match on first boot. Put the card in the
+phone and power on holding volume-up, releasing it when the warning appears
+(holding it longer picks the toolbox); lk2nd finds the card and boots it.
 
 **Access.** There is no SSH and nothing on the phone accepts network
 connections (nftables drops all incoming traffic). Administration (a shell,

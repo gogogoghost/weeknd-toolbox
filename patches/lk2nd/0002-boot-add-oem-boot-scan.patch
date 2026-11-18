@@ -1,0 +1,161 @@
+From: weeknd-toolbox
+Subject: [PATCH] boot: add `fastboot oem boot-scan`
+
+Run the boot scan's discovery steps (register block devices including the
+SD card, mount each candidate partition, read and check extlinux.conf) and
+report the outcome per partition, without booting. The boot path itself
+keeps no log once the next OS starts, so this is the way to see why an SD
+card isn't booting. Details (MMC init, missing files) also go to
+`fastboot oem log`.
+
+Applies to lk2nd commit e9c8b21735c13dd7ace808b1e35451638f0a0c6d (tag 23.1),
+after 0001.
+---
+diff --git i/lk2nd/boot/boot.c w/lk2nd/boot/boot.c
+index 7f37c61..c0fdfcb 100644
+--- i/lk2nd/boot/boot.c
++++ w/lk2nd/boot/boot.c
+@@ -2,6 +2,7 @@
+ /* Copyright (c) 2023 Nikita Travkin <nikita@trvn.ru> */
+ 
+ #include <debug.h>
++#include <fastboot.h>
+ #include <lib/bio.h>
+ #include <lib/fs.h>
+ #include <list.h>
+@@ -70,7 +71,7 @@ static void lk2nd_scan_devices(void)
+  * If appropriate OS is found, it will be booted, and this
+  * method will never return.
+  */
+-void lk2nd_boot(void)
++static void lk2nd_boot_init(void)
+ {
+ 	static bool init_done = false;
+ 
+@@ -78,6 +79,61 @@ void lk2nd_boot(void)
+ 		lk2nd_bdev_init();
+ 		init_done = true;
+ 	}
++}
+ 
++void lk2nd_boot(void)
++{
++	lk2nd_boot_init();
+ 	lk2nd_scan_devices();
+ }
++
++/*
++ * fastboot oem boot-scan: do what the boot scan does (find block devices,
++ * mount each candidate, read and check extlinux.conf) and report every step,
++ * without booting anything. Details also go to `fastboot oem log`.
++ */
++static void scan_report(const char *msg)
++{
++	dprintf(INFO, "boot-scan: %s\n", msg);
++	fastboot_info(msg);
++}
++
++static void cmd_oem_boot_scan(const char *arg, void *data, unsigned sz)
++{
++	struct bdev_struct *bdevs;
++	char mountpoint[16];
++	char result[128];
++	char line[160];
++	bdev_t *bdev;
++	int ret;
++
++	lk2nd_boot_init();
++	bdevs = bio_get_bdevs();
++
++	list_for_every_entry(&bdevs->list, bdev, bdev_t, node) {
++		if (!bdev->is_leaf)
++			continue;
++
++		if (bdev->size < LK2ND_BOOT_MIN_SIZE &&
++		    !(bdev->label && !strncmp(bdev->label, "boot", strlen("boot"))))
++			continue;
++
++		snprintf(mountpoint, sizeof(mountpoint), "/%s", bdev->name);
++		ret = fs_mount(mountpoint, "ext2", bdev->name);
++		if (ret < 0) {
++			snprintf(line, sizeof(line), "%s %s: no ext2 (%d)", bdev->name,
++				 bdev->label ? bdev->label : "-", ret);
++			scan_report(line);
++			continue;
++		}
++
++		lk2nd_check_extlinux(mountpoint, result, sizeof(result));
++		snprintf(line, sizeof(line), "%s %s: %s", bdev->name,
++			 bdev->label ? bdev->label : "-", result);
++		scan_report(line);
++		fs_unmount(mountpoint);
++	}
++
++	fastboot_okay("");
++}
++FASTBOOT_REGISTER("oem boot-scan", cmd_oem_boot_scan);
+diff --git i/lk2nd/boot/boot.h w/lk2nd/boot/boot.h
+index 0edcae5..def8373 100644
+--- i/lk2nd/boot/boot.h
++++ w/lk2nd/boot/boot.h
+@@ -12,5 +12,6 @@ void lk2nd_print_file_tree(char *root, char *prefix);
+ 
+ /* extlinux.c */
+ void lk2nd_try_extlinux(const char *mountpoint);
++int lk2nd_check_extlinux(const char *root, char *result, size_t len);
+ 
+ #endif /* LK2ND_BOOT_BOOT_H */
+diff --git i/lk2nd/boot/extlinux.c w/lk2nd/boot/extlinux.c
+index 5bcf607..16c797a 100644
+--- i/lk2nd/boot/extlinux.c
++++ w/lk2nd/boot/extlinux.c
+@@ -663,6 +663,49 @@ static void lk2nd_boot_label(struct label *label)
+  * Check if /extlinux/extlinux.conf exists and try to
+  * boot it if so.
+  */
++/**
++ * lk2nd_check_extlinux() - Check a file system like lk2nd_try_extlinux(),
++ * without booting. Writes a one-line verdict to @result.
++ *
++ * Returns: 0 if it would try to boot, negative otherwise.
++ */
++int lk2nd_check_extlinux(const char *root, char *result, size_t len)
++{
++	struct filehandle *fileh;
++	struct file_stat stat;
++	struct label label = {0};
++	char path[64];
++	char *data;
++	int ret;
++
++	snprintf(path, sizeof(path), "%s/extlinux/extlinux.conf", root);
++	ret = fs_open_file(path, &fileh);
++	if (ret < 0) {
++		snprintf(result, len, "no extlinux.conf (%d)", ret);
++		return -1;
++	}
++
++	fs_stat_file(fileh, &stat);
++	data = malloc(stat.size + 1);
++	fs_read_file(fileh, data, 0, stat.size);
++	fs_close_file(fileh);
++	data[stat.size] = '\0';
++
++	if (parse_conf(data, stat.size, &label) < 0) {
++		snprintf(result, len, "extlinux.conf unparseable");
++		free(data);
++		return -1;
++	}
++	if (!expand_conf(&label, root)) {
++		snprintf(result, len, "extlinux.conf incomplete (see oem log)");
++		free(data);
++		return -1;
++	}
++	snprintf(result, len, "OK, would boot '%s' (%s)", label.name, label.kernel);
++	free(data);
++	return 0;
++}
++
+ void lk2nd_try_extlinux(const char *root)
+ {
+ 	struct filehandle *fileh;

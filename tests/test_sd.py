@@ -101,11 +101,16 @@ def test_assemble_disk_image(tmp_path):
 
     table = json.loads(subprocess.run(["sfdisk", "--json", img], capture_output=True,
                                       text=True, check=True).stdout)["partitiontable"]
-    assert table["label"] == "gpt" and table["id"].lower() == ids.disk
+    assert table["label"] == "dos"  # lk2nd can't read GPT
+    assert table["id"].lower() == f"0x{ids.disk}"
     p1, p2 = table["partitions"]
-    assert (p1["name"], p1["uuid"].lower(), p1["start"]) == ("flipboot", ids.boot, 2048)
-    assert (p2["name"], p2["uuid"].lower()) == ("fliproot", ids.root)
-    assert p2["type"] == sd.TYPE_ROOT_ARM64  # what systemd-repart grows
+    assert (p1["type"], p1["start"]) == ("83", 2048)
+    assert p2["type"] == "83" and p2["start"] == 2048 + (16 << 20) // 512
+    # Linux names MBR partitions <disk id>-<number>; root=PARTUUID= relies on it
+    blkid = subprocess.run(["blkid", "-p", "-o", "export", "-O", str(p2["start"] * 512), img],
+                           capture_output=True, text=True).stdout
+    assert "LABEL=fliproot" in blkid
+    assert ids.root == f"{ids.disk}-02" and ids.boot == f"{ids.disk}-01"
     # the file systems are where the table says
     with open(img, "rb") as f:
         f.seek(p1["start"] * 512)
@@ -198,3 +203,22 @@ def test_refuses_root_fs_with_user_owned_system_files(tmp_path):
     for bad in ("./etc", "./usr/lib", "./", "./boot/Image.gz"):
         with pytest.raises(FlipError, match="owned by a regular user"):
             sd.check_ownership(build([(bad, 1000)]))
+
+
+@pytest.mark.skipif(shutil.which("sfdisk") is None, reason="needs sfdisk")
+def test_root_partition_grows_to_fill_card(tmp_path):
+    ids = Ids.derive("grow")
+    boot, root = tmp_path / "b.img", tmp_path / "r.img"
+    boot.write_bytes(b"\0" * (4 << 20))
+    root.write_bytes(b"\0" * (8 << 20))
+    img = tmp_path / "sd.img"
+    sd.assemble(img, boot, root, ids)
+    with open(img, "r+b") as f:  # a bigger "card"
+        f.truncate(64 << 20)
+    sd.grow_root_partition(str(img), sudo=False)
+    table = json.loads(subprocess.run(["sfdisk", "--json", img], capture_output=True,
+                                      text=True, check=True).stdout)["partitiontable"]
+    p1, p2 = table["partitions"]
+    assert p1["size"] == (4 << 20) // 512  # boot untouched
+    assert p2["start"] + p2["size"] == (64 << 20) // 512
+    assert table["id"].lower() == f"0x{ids.disk}"  # same partition IDs after growing
