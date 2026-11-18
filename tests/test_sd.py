@@ -134,3 +134,67 @@ def test_overlay_has_no_ssh_and_firewall_drops_input():
     nft = (overlay / "etc/nftables.conf").read_text()
     assert "hook input priority filter; policy drop;" in nft
     assert "policy drop" in nft.split("chain forward")[1].split("}")[0]
+
+
+def _owners(img: Path, paths: list[str]) -> dict[str, str]:
+    out = {}
+    for p in paths:
+        stat = subprocess.run(["debugfs", "-R", f"stat {p}", str(img)],
+                              capture_output=True, text=True).stdout
+        line = next(ln for ln in stat.splitlines() if "User:" in ln).split()
+        out[p] = f"{line[line.index('User:') + 1]}:{line[line.index('Group:') + 1]}"
+    return out
+
+
+def test_staged_files_are_packed_as_root_with_standard_modes(tmp_path):
+    src = tmp_path / "stage"
+    (src / "etc/flipd").mkdir(parents=True)
+    (src / "etc/flipd").chmod(0o700)
+    (src / "etc/flipd/identity.pem").write_text("k")
+    (src / "etc/flipd/identity.pem").chmod(0o600)
+    (src / "usr/lib").mkdir(parents=True)
+    (src / "usr/lib/run.sh").write_text("#!/bin/sh")
+    (src / "usr/lib/run.sh").chmod(0o700)
+    tar = sd.root_owned_tar(src, tmp_path / "s.tar")
+    import tarfile
+    with tarfile.open(tar) as tf:
+        members = {m.name: m for m in tf}
+    assert "." not in members and "./" not in members  # never touches / itself
+    assert all(m.uid == 0 and m.gid == 0 and m.uname == "root" for m in members.values())
+    assert members["etc"].mode == 0o755 and members["etc/flipd"].mode == 0o755
+    assert members["usr/lib/run.sh"].mode == 0o755
+    assert members["etc/flipd/identity.pem"].mode == 0o644  # setup.sh tightens it
+
+
+def test_file_systems_are_root_owned_whoever_builds_them(tmp_path):
+    if shutil.which("debugfs") is None:
+        pytest.skip("debugfs not installed")
+    src = tmp_path / "boot"
+    (src / "extlinux").mkdir(parents=True)
+    (src / "Image.gz").write_bytes(b"k")
+    (src / "extlinux/extlinux.conf").write_text("default flip\n")
+    img = tmp_path / "boot.ext2"
+    sd.make_ext("ext2", img, 16 << 20, sd.root_owned_tar(src, tmp_path / "b.tar"),
+                "flipboot", Ids.derive("x").boot_fs, 0)
+    owners = _owners(img, ["/", "/Image.gz", "/extlinux", "/extlinux/extlinux.conf"])
+    assert set(owners.values()) == {"0:0"}, owners
+
+
+def test_refuses_root_fs_with_user_owned_system_files(tmp_path):
+    import tarfile
+
+    def build(entries):
+        path = tmp_path / "r.tar"
+        with tarfile.open(path, "w") as tf:
+            for name, uid in entries:
+                info = tarfile.TarInfo(name)
+                info.type, info.uid, info.gid = tarfile.DIRTYPE, uid, uid
+                tf.addfile(info)
+        return path
+
+    ok = build([("./", 0), ("./etc", 0), ("./var/log/journal", 0), ("./home/phone", 1000),
+                ("./home/phone/.cache", 1000)])
+    sd.check_ownership(ok)
+    for bad in ("./etc", "./usr/lib", "./", "./boot/Image.gz"):
+        with pytest.raises(FlipError, match="owned by a regular user"):
+            sd.check_ownership(build([(bad, 1000)]))

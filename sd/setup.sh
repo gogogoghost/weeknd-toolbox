@@ -3,9 +3,8 @@
 set -eu
 DEBUG="${1:-0}"
 
-# Files copied in from the build machine: owned by root, keys private.
-chown -R root:root /etc/flipd /usr/lib/flipd /etc/systemd /etc/repart.d /etc/udev \
-	/etc/apt /etc/nftables.conf /usr/lib/modules /usr/lib/firmware
+# Files copied in from the build machine arrive owned by root with standard
+# modes (sd.py root_owned_tar); only the flip-link keys need tightening.
 chmod 700 /etc/flipd
 chmod 600 /etc/flipd/*
 

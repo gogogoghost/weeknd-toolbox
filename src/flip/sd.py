@@ -35,7 +35,7 @@ IMAGE = SD / "sd.img"
 MANIFEST = SD / "manifest.json"
 SD_SRC = config.REPO / "sd"
 KEYRING = Path("/usr/share/keyrings/debian-archive-keyring.gpg")
-HOST_TOOLS = ["perl", "apt", "dpkg", "mke2fs", "sfdisk", "mcopy", "debugfs", "newuidmap",
+HOST_TOOLS = ["perl", "h2ph", "apt", "dpkg", "mke2fs", "sfdisk", "mcopy", "debugfs", "newuidmap",
               "qemu-aarch64-static"]
 
 MiB = 1 << 20
@@ -53,7 +53,11 @@ def missing_tools() -> list[str]:
     if not KEYRING.exists():
         missing.append("debian-archive-keyring")
     binfmt = Path("/proc/sys/fs/binfmt_misc/qemu-aarch64")
-    if not binfmt.exists() or "enabled" not in binfmt.read_text():
+    text = binfmt.read_text() if binfmt.exists() else ""
+    flags = next((ln.split(":", 1)[1] for ln in text.splitlines() if ln.startswith("flags:")), "")
+    # F: the kernel opens qemu once at registration, so it also works inside
+    # the build's chroot, where /usr/bin/qemu-aarch64-static doesn't exist.
+    if "enabled" not in text or "F" not in flags:
         missing.append("qemu-user-static-binfmt (arm64 emulation not registered)")
     return missing
 
@@ -179,20 +183,52 @@ def stage(stage_dir: Path, ids: Ids, identity_pem: Path, firmware_from: Path,
     return {"kernel_release": release, "firmware": firmware}
 
 
-def build_rootfs(pins: lock.Lock, stage_dir: Path, tarball: Path, debug: bool) -> None:
+def perl_headers(dest: Path) -> Path:
+    """Perl versions of the C headers mmdebstrap requires (syscall.ph, sys/ioctl.ph).
+
+    Debian ships these with perl; Arch doesn't, so generate them from this
+    computer's own headers with h2ph (part of perl).
+    """
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True)
+    # h2ph exits non-zero over a few headers it can't translate; we only need
+    # the two below, which are checked afterwards.
+    run(["h2ph", "-d", dest, "-a", "syscall.h", "sys/ioctl.h"], cwd=Path("/usr/include"),
+        capture=True, check=False, quiet=True)
+    # A C `#warning` that h2ph turns into a runtime warning on every use.
+    features = dest / "features.ph"
+    if features.exists():
+        features.write_text("\n".join(
+            line for line in features.read_text().splitlines()
+            if "requires\\ compiling\\ with\\ optimization" not in line) + "\n")
+    check = run(["perl", f"-I{dest}", "-e",
+                 'require "syscall.ph"; require "sys/ioctl.ph"; '
+                 'print &SYS_unshare, " ", &TIOCGWINSZ'],
+                capture=True, check=False, quiet=True)
+    if check.returncode != 0:
+        raise FlipError(f"could not generate perl's syscall headers for mmdebstrap:\n"
+                        f"{check.stderr.strip()}")
+    return dest
+
+
+def build_rootfs(pins: lock.Lock, stage_tar: Path, tarball: Path, debug: bool) -> None:
     mmdebstrap = fetch.fetch_file(pins.file["mmdebstrap"])
+    headers = perl_headers(SD / "perl-headers")
     deb = pins.debian
     epoch = _snapshot_epoch(deb.snapshot)
     setup = SD_SRC / "setup.sh"
     cmd = [
-        "perl", mmdebstrap,
+        "perl", f"-I{headers}", mmdebstrap,
         "--mode=unshare", "--variant=apt", "--architectures=arm64",
+        # Its emulation check needs arch-test (not packaged for Arch);
+        # missing_tools() checks the same thing.
+        "--skip=check/qemu",
         f"--keyring={KEYRING}",
         "--aptopt=Acquire::Check-Valid-Until \"false\"",  # snapshots are old by design
         "--aptopt=Acquire::Retries \"3\"",
         "--aptopt=APT::Install-Recommends \"false\"",
         "--include=" + ",".join(profile.SD_PACKAGES),
-        f"--customize-hook=sync-in {stage_dir} /",
+        f"--customize-hook=tar-in {stage_tar} /",
         f"--customize-hook=copy-in {setup} /tmp",
         f"--customize-hook=chroot \"$1\" /bin/sh /tmp/setup.sh {1 if debug else 0}",
         "--customize-hook=rm \"$1/tmp/setup.sh\"",
@@ -205,6 +241,53 @@ def _snapshot_epoch(snapshot: str) -> int:
     from datetime import datetime, timezone
     return int(datetime.strptime(snapshot, "%Y%m%dT%H%M%SZ")
                .replace(tzinfo=timezone.utc).timestamp())
+
+
+def root_owned_tar(src: Path, out: Path) -> Path:
+    """Pack a directory into a tarball whose entries are all owned by root.
+
+    Files staged here belong to whoever runs flip (often uid 1000, the same
+    number as the phone's `phone` user); copied as-is they would let that user
+    rewrite /etc, /usr or the kernel. The top directory itself is left out so
+    unpacking it never changes / on the phone. Modes are normalized too.
+    """
+    def as_root(info: tarfile.TarInfo) -> tarfile.TarInfo:
+        info.uid = info.gid = 0
+        info.uname = info.gname = "root"
+        # Standard modes whatever this computer's umask; setup.sh makes the
+        # few private files private.
+        if info.isdir() or (info.isfile() and info.mode & 0o111):
+            info.mode = 0o755
+        elif info.isfile():
+            info.mode = 0o644
+        return info
+
+    out.unlink(missing_ok=True)
+    with tarfile.open(out, "w", format=tarfile.PAX_FORMAT) as tf:
+        for entry in sorted(src.iterdir()):
+            tf.add(entry, arcname=entry.name, filter=as_root)
+    return out
+
+
+# The phone's regular users (the `phone` agent account) start here; nothing
+# outside their home directories may belong to one.
+FIRST_USER_UID = 1000
+
+
+def check_ownership(tarball: Path, allowed: tuple[str, ...] = ("home/",)) -> None:
+    """Refuse a root file system where a regular user owns system files."""
+    bad = []
+    with tarfile.open(tarball) as tf:
+        for m in tf:
+            name = m.name.removeprefix("./")
+            if any(name.startswith(a) for a in allowed):
+                continue
+            if FIRST_USER_UID <= m.uid < 65534 or FIRST_USER_UID <= m.gid < 65534:
+                bad.append(f"/{name} ({m.uid}:{m.gid})")
+    if bad:
+        shown = "\n  ".join(bad[:10]) + ("\n  ..." if len(bad) > 10 else "")
+        raise FlipError("the root file system has system files owned by a regular "
+                        f"user, which would let the agent account change them:\n  {shown}")
 
 
 def _round_up(n: int, to: int) -> int:
@@ -224,8 +307,9 @@ def make_ext(kind: str, out: Path, size: int, source: Path, label: str, fs_uuid:
     out.unlink(missing_ok=True)
     with open(out, "wb") as f:
         f.truncate(size)
+    # root_owner: otherwise / belongs to whoever runs mke2fs.
     args = ["mke2fs", "-q", "-F", "-t", kind, "-L", label, "-U", fs_uuid,
-            "-E", f"hash_seed={fs_uuid}", "-d", source, out]
+            "-E", f"hash_seed={fs_uuid},root_owner=0:0", "-d", source, out]
     run(args, env={"E2FSPROGS_FAKE_TIME": str(epoch)})
 
 
@@ -280,7 +364,9 @@ def build_image(debug: bool = False, backup_name: str | None = None) -> Path:
     say(f"[2] Debian {pins.debian.suite} (snapshot {pins.debian.snapshot}) for arm64; "
         "this downloads ~200 MB and takes a while under emulation")
     tarball = SD / "rootfs.tar"
-    build_rootfs(pins, stage_dir, tarball, debug)
+    stage_tar = root_owned_tar(stage_dir, SD / "stage.tar")
+    build_rootfs(pins, stage_tar, tarball, debug)
+    check_ownership(tarball)
 
     say("[3] file systems")
     boot_dir = SD / "boot"
@@ -291,7 +377,8 @@ def build_image(debug: bool = False, backup_name: str | None = None) -> Path:
     shutil.copyfile(build.OUT.dtb, boot_dir / profile.KERNEL_DTB_NAME)
     (boot_dir / "extlinux/extlinux.conf").write_text(extlinux_conf(ids, debug))
     boot_img, root_img = SD / "boot.ext2", SD / "root.ext4"
-    make_ext("ext2", boot_img, profile.SD_BOOT_SIZE, boot_dir, profile.SD_BOOT_LABEL,
+    boot_tar = root_owned_tar(boot_dir, SD / "boot.tar")
+    make_ext("ext2", boot_img, profile.SD_BOOT_SIZE, boot_tar, profile.SD_BOOT_LABEL,
              ids.boot_fs, epoch)
     make_ext("ext4", root_img, root_fs_size(tarball), tarball, profile.SD_ROOT_LABEL,
              ids.root_fs, epoch)
@@ -299,7 +386,7 @@ def build_image(debug: bool = False, backup_name: str | None = None) -> Path:
     say("[4] disk image")
     assemble(IMAGE, boot_img, root_img, ids)
     os.chmod(IMAGE, 0o600)
-    for tmp in (boot_img, root_img, tarball):
+    for tmp in (boot_img, root_img, tarball, stage_tar, boot_tar):
         tmp.unlink()
     shutil.rmtree(stage_dir)
     digest = sha256_file(IMAGE)
