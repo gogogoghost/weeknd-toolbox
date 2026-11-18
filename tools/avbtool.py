@@ -3144,6 +3144,10 @@ class Avb(object):
           # for a partition with the same name. Since it's not meaningful
           # to include both descriptors, only include the last seen descriptor.
           # See bug 76386656 for details.
+          # LOCAL MODIFICATION (original weeknd-toolbox author, not upstream
+          # AOSP): drop hash descriptors (boot, dtbo, recovery) when
+          # re-signing. The re-signed vbmeta then doesn't check those
+          # partitions at all, which is what lets lk2nd boot from recovery.
           if isinstance(desc, AvbHashDescriptor):
             print('Skipping descriptor for', desc.partition_name)
             continue

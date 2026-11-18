@@ -1,0 +1,4 @@
+// Install Debian security updates automatically (signed by Debian; no admin
+// access involved). Anything new still needs `flip phone`.
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";

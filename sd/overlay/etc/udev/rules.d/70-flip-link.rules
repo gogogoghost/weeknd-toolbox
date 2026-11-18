@@ -1,0 +1,2 @@
+# Only root (flipd) may use the USB serial line.
+KERNEL=="ttyGS[0-9]*", MODE="0600", OWNER="root", GROUP="root"

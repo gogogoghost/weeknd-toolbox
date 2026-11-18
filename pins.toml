@@ -1,0 +1,48 @@
+# Every external input of the build, pinned by commit SHA or SHA-256.
+#
+# trust levels:
+#   upstream-release     an official upstream release, pinned to its commit
+#   pinned               a specific upstream commit, reviewed and pinned
+#   pinned-on-first-use  no upstream proof exists; hash recorded on first use
+#
+# Any url can be overridden from the environment to fetch from your own mirror,
+# e.g. FLIP_URL_LINUX=https://git.example/linux. The pins still apply.
+
+[git.linux]
+url = "https://github.com/affenull2345/linux"
+commit = "c438fd63372aea125a063c5c3500f03a2ce552c5"
+trust = "pinned"
+note = "Kernel fork, originally branch wip/qm215/6.3-rc7"
+
+[git.lk2nd]
+url = "https://github.com/msm8916-mainline/lk2nd"
+commit = "e9c8b21735c13dd7ace808b1e35451638f0a0c6d"
+trust = "upstream-release"
+note = "Release tag 23.1 (branch experimental-tmp3 was deleted upstream)"
+
+[file.busybox]
+url = "https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-armv8l"
+sha256 = "141adb1b625a6f44c4b114f76b4387b4ea4f7ab802b88eb40e0d2f6adcccb1c3"
+trust = "pinned-on-first-use"
+note = "Prebuilt busybox 1.31.0, 32-bit ARM, static; pinned 2026-11-11"
+
+[file.author-vbmeta]
+url = "https://storage.abscue.de/private/zImage/wnd-vbmeta.img"
+sha256 = "9354c9a8c6f6df885d11ea30f884d90c290128c7477caf6c3d00ee9cbaa7028b"
+trust = "pinned-on-first-use"
+note = """Stock vbmeta (firmware 00.2238.20.13) from the original author. Only a \
+fallback: `flip backup adopt-vbmeta` installs the one from your own backup."""
+
+[file.mmdebstrap]
+url = "https://gitlab.mister-muffin.de/josch/mmdebstrap/raw/a6fcdbc4dde9ac076872709a78d5acd67e62e2bf/mmdebstrap"
+sha256 = "4375553dabf3aa3e028bc4304f0038aff2a27d8848f258631eea7de2979a2e03"
+trust = "upstream-release"
+note = "mmdebstrap 1.7.0 (tag commit). Builds the SD card's Debian system without root."
+
+[debian]
+suite = "trixie"
+snapshot = "20261117T000000Z"
+trust = "upstream-release"
+note = """Debian 13 packages exactly as they were at this time on snapshot.debian.org. \
+apt checks every package against Debian's signing keys. The phone itself updates \
+from the live Debian mirrors (security fixes) after it is set up."""

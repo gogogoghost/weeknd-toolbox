@@ -1,0 +1,12 @@
+[Unit]
+Description=flip-link: wired admin access for trusted computers
+Requires=flip-gadget.service
+After=flip-gadget.service
+
+[Service]
+ExecStart=/usr/bin/python3 -I /usr/lib/flipd/flipd.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

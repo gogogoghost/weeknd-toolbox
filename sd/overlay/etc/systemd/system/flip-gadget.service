@@ -1,0 +1,13 @@
+[Unit]
+Description=USB serial gadget for flip-link
+After=sys-kernel-config.mount systemd-machine-id-commit.service
+DefaultDependencies=no
+Before=sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/flipd/gadget.sh
+
+[Install]
+WantedBy=sysinit.target
